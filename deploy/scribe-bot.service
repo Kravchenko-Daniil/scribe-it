@@ -1,0 +1,18 @@
+[Unit]
+Description=Scribe It — Telegram transcription bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/scribe-bot
+EnvironmentFile=/opt/scribe-bot/.env
+ExecStart=/root/.local/bin/uv run --project /opt/scribe-bot python bot.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

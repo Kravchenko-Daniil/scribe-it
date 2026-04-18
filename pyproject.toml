@@ -1,0 +1,15 @@
+[project]
+name = "scribe-it"
+version = "0.1.0"
+description = "Telegram bot for transcribing video/audio via ElevenLabs Scribe"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.15",
+    "aiohttp>=3.10",
+    "python-dotenv>=1.0",
+    "requests>=2.32",
+    "yt-dlp>=2026.1.1",
+]
+
+[tool.uv]
+dev-dependencies = []
