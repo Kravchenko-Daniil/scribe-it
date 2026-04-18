@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
 import pathlib
@@ -24,6 +25,7 @@ ELEVEN_KEY = os.environ["ELEVENLABS_API_KEY"]
 ALLOWED: set[int] = {
     int(x) for x in os.environ.get("ALLOWED_USER_IDS", "").split(",") if x.strip().isdigit()
 }
+OWNER_ID = int(os.environ.get("OWNER_ID", "0") or "0")
 TG_FILE_LIMIT = 20 * 1024 * 1024  # stock Bot API limit
 
 logging.basicConfig(
@@ -55,6 +57,43 @@ def _allowed(user_id: int | None) -> bool:
 
 async def _reject(msg: Message) -> None:
     await msg.answer("Извини, этот бот приватный.")
+    await _notify_owner_of_stranger(msg)
+
+
+async def _notify_owner_of_stranger(msg: Message) -> None:
+    if not OWNER_ID or not msg.from_user:
+        return
+    u = msg.from_user
+    name = html.escape(u.full_name or "—")
+    who = f"<a href='tg://user?id={u.id}'>{name}</a>"
+    if u.username:
+        who += f" (@{html.escape(u.username)})"
+    who += f" [<code>{u.id}</code>]"
+
+    if msg.video:
+        kind = "видео"
+    elif msg.audio:
+        kind = "аудио"
+    elif msg.voice:
+        kind = "голосовое"
+    elif msg.video_note:
+        kind = "кружочек"
+    elif msg.document:
+        kind = "документ"
+    elif msg.text:
+        kind = "текст"
+    else:
+        kind = "сообщение"
+
+    text = f"🚫 Чужой пишет боту\n\n{who}\nТип: {kind}"
+    if msg.text:
+        preview = html.escape(msg.text[:300])
+        text += f"\n<pre>{preview}</pre>"
+
+    try:
+        await bot.send_message(OWNER_ID, text, disable_web_page_preview=True)
+    except Exception:
+        log.exception("failed to notify owner")
 
 
 @dp.message(Command("start", "help"))
