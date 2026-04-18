@@ -37,7 +37,7 @@ YT_DLP = [sys.executable, "-m", "yt_dlp"]
 async def download_youtube(url: str, out_dir: pathlib.Path) -> pathlib.Path:
     """yt-dlp: audio-only, re-encoded to opus. Returns path to the file."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    template = str(out_dir / "source.%(ext)s")
+    template = str(out_dir / "%(title)s.%(ext)s")
     cookies = pathlib.Path(__file__).parent / "cookies.txt"
 
     base_cmd = [
@@ -66,7 +66,7 @@ async def download_youtube(url: str, out_dir: pathlib.Path) -> pathlib.Path:
 async def download_direct(url: str, out_dir: pathlib.Path) -> pathlib.Path:
     """Download arbitrary URL via yt-dlp (handles Yandex.Disk, Google Drive, direct http)."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    template = str(out_dir / "source.%(ext)s")
+    template = str(out_dir / "%(title)s.%(ext)s")
     code, log = await _run([
         *YT_DLP,
         "--no-playlist",
@@ -81,10 +81,12 @@ async def download_direct(url: str, out_dir: pathlib.Path) -> pathlib.Path:
     raise RuntimeError("downloaded file not found")
 
 
-async def extract_audio(src: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
+async def extract_audio(
+    src: pathlib.Path, out_dir: pathlib.Path, stem: str | None = None
+) -> pathlib.Path:
     """ffmpeg: extract audio track as opus (small, fast, high quality for speech)."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    dst = out_dir / "audio.opus"
+    dst = out_dir / f"{stem or src.stem or 'audio'}.opus"
     code, log = await _run([
         "ffmpeg", "-y",
         "-i", str(src),

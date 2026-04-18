@@ -41,10 +41,8 @@ WELCOME = (
     "• Видео/аудио/voice файлом (до 20 МБ — это ограничение Telegram)\n"
     "• Ссылку на YouTube — любой длины\n"
     "• Прямую ссылку на файл (Яндекс.Диск, Google Drive, прямой http)\n\n"
-    "<b>Что получишь обратно:</b>\n"
-    "• <code>.txt</code> — текст с разделением по спикерам\n"
-    "• <code>.srt</code> — с таймкодами (для субтитров)\n"
-    "• <code>.json</code> — сырой ответ от Scribe (word-level timestamps)\n\n"
+    "В ответ пришлю <code>.txt</code> с текстом, разбитым на абзацы и по спикерам. "
+    "Имя файла = название видео.\n\n"
     "Длинные видео (несколько часов) лучше заливать на YouTube unlisted или на Диск, и присылать ссылку."
 )
 
@@ -86,16 +84,16 @@ async def on_media(msg: Message) -> None:
     workdir = storage.new_workdir()
     status = await msg.answer("⬇️ Скачиваю файл…")
     try:
-        src = workdir / "input"
+        stem = _stem_from(msg, media)
         ext = pathlib.Path(getattr(media, "file_name", "") or "").suffix
-        src = workdir / f"input{ext or ''}"
+        src = workdir / f"{stem}{ext or ''}"
         file = await bot.get_file(media.file_id)
         await bot.download_file(file.file_path, destination=src)
 
         await status.edit_text("🎧 Извлекаю аудио…")
-        audio = await downloader.extract_audio(src, workdir)
+        audio = await downloader.extract_audio(src, workdir, stem=stem)
 
-        await _transcribe_and_send(msg, status, audio, workdir, stem=_stem_from(msg, media))
+        await _transcribe_and_send(msg, status, audio, workdir, stem=stem)
     except Exception as e:
         log.exception("media pipeline failed")
         await status.edit_text(f"❌ Ошибка: {e}")
@@ -127,9 +125,9 @@ async def on_text(msg: Message) -> None:
                 audio = src
             else:
                 await status.edit_text("🎧 Извлекаю аудио…")
-                audio = await downloader.extract_audio(src, workdir)
+                audio = await downloader.extract_audio(src, workdir, stem=src.stem)
 
-        stem = _stem_from_url(text)
+        stem = audio.stem if audio.stem and audio.stem.lower() not in ("audio", "source") else _stem_from_url(text)
         await _transcribe_and_send(msg, status, audio, workdir, stem=stem)
     except Exception as e:
         log.exception("url pipeline failed")
@@ -157,11 +155,10 @@ async def _transcribe_and_send(
     data = await asyncio.to_thread(scribe.transcribe, audio, ELEVEN_KEY)
     outputs = scribe.write_outputs(data, workdir, stem)
 
-    await status.edit_text("✅ Готово, отправляю файлы…")
-    for key in ("txt", "srt", "json"):
-        p = outputs[key]
-        if p.exists() and p.stat().st_size > 0:
-            await msg.answer_document(FSInputFile(p))
+    await status.edit_text("✅ Готово, отправляю…")
+    txt = outputs["txt"]
+    if txt.exists() and txt.stat().st_size > 0:
+        await msg.answer_document(FSInputFile(txt))
     await status.delete()
 
 
