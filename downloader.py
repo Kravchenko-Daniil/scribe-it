@@ -38,7 +38,9 @@ async def download_youtube(url: str, out_dir: pathlib.Path) -> pathlib.Path:
     """yt-dlp: audio-only, re-encoded to opus. Returns path to the file."""
     out_dir.mkdir(parents=True, exist_ok=True)
     template = str(out_dir / "source.%(ext)s")
-    code, log = await _run([
+    cookies = pathlib.Path(__file__).parent / "cookies.txt"
+
+    base_cmd = [
         *YT_DLP,
         "--no-playlist",
         "-f", "bestaudio/best",
@@ -46,10 +48,14 @@ async def download_youtube(url: str, out_dir: pathlib.Path) -> pathlib.Path:
         "--audio-format", "opus",
         "--audio-quality", "0",
         "-o", template,
-        url,
-    ])
+    ]
+    if cookies.exists():
+        base_cmd += ["--cookies", str(cookies)]
+    # If no cookies — rely on bgutil PO token provider (plugin loaded from venv).
+
+    code, log = await _run(base_cmd + [url])
     if code != 0:
-        raise RuntimeError(f"yt-dlp failed: {log[-600:]}")
+        raise RuntimeError(f"yt-dlp failed: {log[-800:]}")
     for p in out_dir.iterdir():
         if p.suffix == ".opus":
             return p
