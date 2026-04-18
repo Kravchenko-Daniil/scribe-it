@@ -47,6 +47,7 @@ async def download_youtube(url: str, out_dir: pathlib.Path) -> pathlib.Path:
         "--extract-audio",
         "--audio-format", "opus",
         "--audio-quality", "0",
+        "--remote-components", "ejs:github",
         "-o", template,
     ]
     if cookies.exists():
