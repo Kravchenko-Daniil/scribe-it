@@ -3,7 +3,7 @@
 # Usage: ./deploy/deploy.sh
 set -euo pipefail
 
-HOST="${HOST:-vps-master}"
+HOST="${HOST:-my-hetzner}"
 REMOTE_DIR="/opt/scribe-bot"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
