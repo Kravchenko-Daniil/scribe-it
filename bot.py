@@ -28,6 +28,19 @@ ALLOWED: set[int] = {
 OWNER_ID = int(os.environ.get("OWNER_ID", "0") or "0")
 TG_FILE_LIMIT = 20 * 1024 * 1024  # stock Bot API limit
 
+MEDIA_EXTS = {
+    ".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".m4v",
+    ".3gp", ".ts", ".mts", ".mpeg", ".mpg", ".ogv",
+    ".opus", ".ogg", ".oga", ".mp3", ".wav", ".flac", ".aac", ".m4a", ".wma",
+}
+
+
+def _strip_media_ext(name: str) -> str:
+    p = pathlib.PurePosixPath(name)
+    while p.suffix.lower() in MEDIA_EXTS:
+        p = p.with_suffix("")
+    return p.name
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -166,7 +179,8 @@ async def on_text(msg: Message) -> None:
                 await status.edit_text("🎧 Извлекаю аудио…")
                 audio = await downloader.extract_audio(src, workdir, stem=src.stem)
 
-        stem = audio.stem if audio.stem and audio.stem.lower() not in ("audio", "source") else _stem_from_url(text)
+        raw_stem = _strip_media_ext(audio.name)
+        stem = raw_stem if raw_stem and raw_stem.lower() not in ("audio", "source") else _stem_from_url(text)
         await _transcribe_and_send(msg, status, audio, workdir, stem=stem)
     except Exception as e:
         log.exception("url pipeline failed")
@@ -204,14 +218,14 @@ async def _transcribe_and_send(
 def _stem_from(msg: Message, media) -> str:
     name = getattr(media, "file_name", None)
     if name:
-        return pathlib.Path(name).stem[:80] or f"transcript_{msg.message_id}"
+        return _strip_media_ext(name)[:80] or f"transcript_{msg.message_id}"
     return f"transcript_{msg.message_id}"
 
 
 def _stem_from_url(url: str) -> str:
     from urllib.parse import urlparse
     parsed = urlparse(url)
-    last = pathlib.Path(parsed.path).stem or parsed.netloc.replace(".", "_")
+    last = _strip_media_ext(pathlib.PurePosixPath(parsed.path).name) or parsed.netloc.replace(".", "_")
     return last[:80] or "transcript"
 
 
