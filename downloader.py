@@ -81,11 +81,25 @@ async def download_direct(url: str, out_dir: pathlib.Path) -> pathlib.Path:
     raise RuntimeError("downloaded file not found")
 
 
+async def has_audio(path: pathlib.Path) -> bool:
+    """Return True if file contains at least one audio stream."""
+    code, log = await _run([
+        "ffprobe", "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries", "stream=codec_type",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ])
+    return code == 0 and log.strip() == "audio"
+
+
 async def extract_audio(
     src: pathlib.Path, out_dir: pathlib.Path, stem: str | None = None
 ) -> pathlib.Path:
     """ffmpeg: extract audio track as opus (small, fast, high quality for speech)."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    if not await has_audio(src):
+        raise RuntimeError("в файле нет аудиодорожки — нечего расшифровывать.")
     dst = out_dir / f"{stem or src.stem or 'audio'}.opus"
     code, log = await _run([
         "ffmpeg", "-y",
