@@ -11,7 +11,7 @@ echo "→ pushing local commits"
 git push origin main
 
 echo "→ rsync to $HOST"
-rsync -av --exclude='.venv' --exclude='__pycache__' --exclude='tmp' --exclude='.git' "$LOCAL_DIR/" "$HOST:$REMOTE_DIR/"
+rsync -av --exclude='.venv' --exclude='__pycache__' --exclude='tmp' --exclude='.git' --exclude='.env' --exclude='.env.local' "$LOCAL_DIR/" "$HOST:$REMOTE_DIR/"
 
 echo "→ uv sync on $HOST"
 ssh "$HOST" "cd $REMOTE_DIR && /root/.local/bin/uv sync"

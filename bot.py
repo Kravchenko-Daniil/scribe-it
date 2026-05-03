@@ -6,9 +6,12 @@ import html
 import logging
 import os
 import pathlib
+import shutil
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message
@@ -18,7 +21,8 @@ import downloader
 import scribe
 import storage
 
-load_dotenv()
+APP_ENV = os.environ.get("APP_ENV", "local")
+load_dotenv(pathlib.Path(__file__).parent / f".env.{APP_ENV}")
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ELEVEN_KEY = os.environ["ELEVENLABS_API_KEY"]
@@ -26,7 +30,9 @@ ALLOWED: set[int] = {
     int(x) for x in os.environ.get("ALLOWED_USER_IDS", "").split(",") if x.strip().isdigit()
 }
 OWNER_ID = int(os.environ.get("OWNER_ID", "0") or "0")
-TG_FILE_LIMIT = 20 * 1024 * 1024  # stock Bot API limit
+LOCAL_API_URL = os.environ.get("TG_LOCAL_API_URL", "").strip() or None
+TG_FILE_LIMIT = 2 * 1024 * 1024 * 1024 if LOCAL_API_URL else 20 * 1024 * 1024
+TG_FILE_LIMIT_LABEL = "2 ГБ" if LOCAL_API_URL else "20 МБ"
 
 MEDIA_EXTS = {
     ".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".m4v",
@@ -47,13 +53,21 @@ logging.basicConfig(
 )
 log = logging.getLogger("scribe-bot")
 
-bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+def _make_bot() -> Bot:
+    props = DefaultBotProperties(parse_mode=ParseMode.HTML)
+    if LOCAL_API_URL:
+        session = AiohttpSession(api=TelegramAPIServer.from_base(LOCAL_API_URL, is_local=True))
+        return Bot(TOKEN, session=session, default=props)
+    return Bot(TOKEN, default=props)
+
+
+bot = _make_bot()
 dp = Dispatcher()
 
 WELCOME = (
     "Привет! Я расшифровываю видео и аудио в текст через ElevenLabs Scribe.\n\n"
     "<b>Что можно прислать:</b>\n"
-    "• Видео/аудио/voice файлом (до 20 МБ — это ограничение Telegram)\n"
+    f"• Видео/аудио/voice файлом (до {TG_FILE_LIMIT_LABEL})\n"
     "• Ссылку на YouTube — любой длины\n"
     "• Прямую ссылку на файл (Яндекс.Диск, Google Drive, прямой http)\n\n"
     "В ответ пришлю <code>.txt</code> с текстом, разбитым на абзацы и по спикерам. "
@@ -128,7 +142,7 @@ async def on_media(msg: Message) -> None:
     size = getattr(media, "file_size", None) or 0
     if size and size > TG_FILE_LIMIT:
         await msg.answer(
-            f"Файл {size / 1024 / 1024:.1f} МБ — больше лимита Telegram Bot API (20 МБ).\n"
+            f"Файл {size / 1024 / 1024:.1f} МБ — больше лимита ({TG_FILE_LIMIT_LABEL}).\n"
             "Залей на Яндекс.Диск или YouTube unlisted и пришли ссылку."
         )
         return
@@ -140,7 +154,7 @@ async def on_media(msg: Message) -> None:
         ext = pathlib.Path(getattr(media, "file_name", "") or "").suffix
         src = workdir / f"{stem}{ext or ''}"
         file = await bot.get_file(media.file_id)
-        await bot.download_file(file.file_path, destination=src)
+        await _fetch_to(file.file_path, src)
 
         await status.edit_text("🎧 Извлекаю аудио…")
         audio = await downloader.extract_audio(src, workdir, stem=stem)
@@ -213,6 +227,16 @@ async def _transcribe_and_send(
     if txt.exists() and txt.stat().st_size > 0:
         await msg.answer_document(FSInputFile(txt))
     await status.delete()
+
+
+async def _fetch_to(file_path: str | None, dst: pathlib.Path) -> None:
+    """In local-mode getFile returns absolute path on disk; move it. Otherwise HTTP-download."""
+    if LOCAL_API_URL and file_path:
+        local_src = pathlib.Path(file_path)
+        if local_src.is_file():
+            shutil.move(str(local_src), str(dst))
+            return
+    await bot.download_file(file_path, destination=dst)
 
 
 def _stem_from(msg: Message, media) -> str:

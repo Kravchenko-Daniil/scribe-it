@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/scribe-bot
+Environment=APP_ENV=prod
 ExecStart=/root/.local/bin/uv run --project /opt/scribe-bot python bot.py
 Restart=on-failure
 RestartSec=10

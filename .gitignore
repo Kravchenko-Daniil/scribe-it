@@ -1,4 +1,6 @@
 .env
+.env.local
+.env.prod
 cookies.txt
 .venv/
 __pycache__/
