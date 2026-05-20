@@ -6,7 +6,9 @@ import html
 import logging
 import os
 import pathlib
+import re
 import shutil
+import time
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -33,6 +35,9 @@ OWNER_ID = int(os.environ.get("OWNER_ID", "0") or "0")
 LOCAL_API_URL = os.environ.get("TG_LOCAL_API_URL", "").strip() or None
 TG_FILE_LIMIT = 2 * 1024 * 1024 * 1024 if LOCAL_API_URL else 20 * 1024 * 1024
 TG_FILE_LIMIT_LABEL = "2 ГБ" if LOCAL_API_URL else "20 МБ"
+ARCHIVE_DIR = pathlib.Path(
+    os.environ.get("SCRIBE_ARCHIVE_DIR") or (pathlib.Path(__file__).parent / "archive")
+)
 
 MEDIA_EXTS = {
     ".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".m4v",
@@ -40,12 +45,69 @@ MEDIA_EXTS = {
     ".opus", ".ogg", ".oga", ".mp3", ".wav", ".flac", ".aac", ".m4a", ".wma",
 }
 
+SOLO_WORDS = {"соло", "solo", "монолог", "monolog", "monologue"}
+DUO_WORDS = {"диалог", "dialog", "dialogue", "созвон", "call"}
+
 
 def _strip_media_ext(name: str) -> str:
     p = pathlib.PurePosixPath(name)
     while p.suffix.lower() in MEDIA_EXTS:
         p = p.with_suffix("")
     return p.name
+
+
+def _parse_caption(text: str | None) -> tuple[int | None, dict[str, str]]:
+    """Parse caption like '2 Даниил Толя' → (2, {'speaker_0': 'Даниил', 'speaker_1': 'Толя'}).
+
+    Strict: every token must be a digit, a known keyword, or a Capitalized name.
+    If anything else appears, the whole caption is ignored (no hints).
+
+    Supported:
+        '2'              → 2 speakers, no names
+        '1' or 'соло'    → 1 speaker (monologue)
+        'Даниил Толя'    → 2 speakers, names auto-numbered
+        '2 Даниил Толя'  → 2 speakers + names
+        empty / long / 'созвон с Толей' / '2 спикера' → no hints, model auto-detects
+    """
+    if not text:
+        return None, {}
+    text = text.strip()
+    if not text or len(text) > 80:
+        return None, {}
+
+    tokens = [t for t in re.split(r"[,;/|\s]+", text) if t]
+    if not tokens:
+        return None, {}
+
+    num: int | None = None
+    names: list[str] = []
+    for t in tokens:
+        low = t.lower()
+        if t.isdigit():
+            n = int(t)
+            if not (1 <= n <= 32):
+                return None, {}
+            if num is None:
+                num = n
+            continue
+        if low in SOLO_WORDS:
+            if num is None:
+                num = 1
+            continue
+        if low in DUO_WORDS:
+            if num is None:
+                num = 2
+            continue
+        # имя: ≥2 букв, начинается с заглавной, остальное — буквы/дефис/апостроф
+        if len(t) >= 2 and t[0].isupper() and all(c.isalpha() or c in "-’'" for c in t):
+            names.append(t)
+            continue
+        return None, {}  # неизвестный токен → бросаем всю команду
+
+    if names and num is None:
+        num = len(names)
+    speaker_map = {f"speaker_{i}": n for i, n in enumerate(names)}
+    return num, speaker_map
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +134,12 @@ WELCOME = (
     "• Прямую ссылку на файл (Яндекс.Диск, Google Drive, прямой http)\n\n"
     "В ответ пришлю <code>.txt</code> с текстом, разбитым на абзацы и по спикерам. "
     "Имя файла = название видео.\n\n"
+    "<b>Подсказки модели</b> — пиши в подписи к файлу (или второй строкой после ссылки):\n"
+    "• <code>2</code> — диалог двух человек\n"
+    "• <code>соло</code> или <code>монолог</code> — один спикер\n"
+    "• <code>Даниил Толя</code> — имена в порядке появления (заодно зададут число спикеров)\n"
+    "• <code>2 Даниил Толя</code> — явно и число, и имена\n"
+    "• пусто — модель сама решит сколько спикеров (для YouTube/случайных файлов так и оставляй)\n\n"
     "Длинные видео (несколько часов) лучше заливать на YouTube unlisted или на Диск, и присылать ссылку."
 )
 
@@ -82,8 +150,43 @@ def _allowed(user_id: int | None) -> bool:
     return user_id in ALLOWED
 
 
+def _user_tag(msg: Message) -> str:
+    u = msg.from_user
+    if not u:
+        return "user=?"
+    handle = f"@{u.username}" if u.username else (u.full_name or "—")
+    return f"{handle}[{u.id}]"
+
+
+def _media_kind(msg: Message) -> str:
+    if msg.video: return "видео"
+    if msg.audio: return "аудио"
+    if msg.voice: return "голосовое"
+    if msg.video_note: return "кружочек"
+    if msg.document: return "документ"
+    if msg.text: return "текст"
+    return "сообщение"
+
+
+def _archive(msg: Message, outputs: dict[str, pathlib.Path]) -> None:
+    """Copy txt+json of a successful transcription into archive/<user_id>/<ts>_<stem>.{ext}."""
+    user_id = msg.from_user.id if msg.from_user else 0
+    try:
+        ts = time.strftime("%Y-%m-%d_%H%M%S")
+        dest = ARCHIVE_DIR / str(user_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        for kind, p in outputs.items():
+            if kind == "srt":
+                continue
+            if p.exists() and p.stat().st_size > 0:
+                shutil.copy(p, dest / f"{ts}_{p.name}")
+    except Exception:
+        log.exception("archive failed for %s", _user_tag(msg))
+
+
 async def _reject(msg: Message) -> None:
     await msg.answer("Извини, этот бот приватный.")
+    log.info("rejected stranger: %s sent %s", _user_tag(msg), _media_kind(msg))
     await _notify_owner_of_stranger(msg)
 
 
@@ -97,22 +200,7 @@ async def _notify_owner_of_stranger(msg: Message) -> None:
         who += f" (@{html.escape(u.username)})"
     who += f" [<code>{u.id}</code>]"
 
-    if msg.video:
-        kind = "видео"
-    elif msg.audio:
-        kind = "аудио"
-    elif msg.voice:
-        kind = "голосовое"
-    elif msg.video_note:
-        kind = "кружочек"
-    elif msg.document:
-        kind = "документ"
-    elif msg.text:
-        kind = "текст"
-    else:
-        kind = "сообщение"
-
-    text = f"🚫 Чужой пишет боту\n\n{who}\nТип: {kind}"
+    text = f"🚫 Чужой пишет боту\n\n{who}\nТип: {_media_kind(msg)}"
     if msg.text:
         preview = html.escape(msg.text[:300])
         text += f"\n<pre>{preview}</pre>"
@@ -140,13 +228,21 @@ async def on_media(msg: Message) -> None:
         return
 
     size = getattr(media, "file_size", None) or 0
+    name = getattr(media, "file_name", None) or ""
+    tag = _user_tag(msg)
+    log.info(
+        "%s sent %s: name=%r size=%.2fMB",
+        tag, _media_kind(msg), name, size / 1024 / 1024,
+    )
     if size and size > TG_FILE_LIMIT:
         await msg.answer(
             f"Файл {size / 1024 / 1024:.1f} МБ — больше лимита ({TG_FILE_LIMIT_LABEL}).\n"
             "Залей на Яндекс.Диск или YouTube unlisted и пришли ссылку."
         )
+        log.info("%s rejected: over TG limit (%.1fMB)", tag, size / 1024 / 1024)
         return
 
+    num_speakers, speaker_names = _parse_caption(msg.caption)
     workdir = storage.new_workdir()
     status = await msg.answer("⬇️ Скачиваю файл…")
     try:
@@ -159,9 +255,12 @@ async def on_media(msg: Message) -> None:
         await status.edit_text("🎧 Извлекаю аудио…")
         audio = await downloader.extract_audio(src, workdir, stem=stem)
 
-        await _transcribe_and_send(msg, status, audio, workdir, stem=stem)
+        await _transcribe_and_send(
+            msg, status, audio, workdir, stem=stem,
+            num_speakers=num_speakers, speaker_names=speaker_names,
+        )
     except Exception as e:
-        log.exception("media pipeline failed")
+        log.exception("%s media pipeline failed", tag)
         await status.edit_text(f"❌ Ошибка: {e}")
     finally:
         storage.cleanup(workdir)
@@ -172,32 +271,44 @@ async def on_text(msg: Message) -> None:
     if not _allowed(msg.from_user.id if msg.from_user else None):
         return await _reject(msg)
 
-    text = (msg.text or "").strip()
-    if not downloader.is_url(text):
+    raw = (msg.text or "").strip()
+    tag = _user_tag(msg)
+    log.info("%s sent text: %r", tag, raw[:200])
+    url, caption = _split_url_and_caption(raw)
+    if not url or not downloader.is_url(url):
         await msg.answer(
             "Пришли видео/аудио файлом или ссылкой (YouTube / Яндекс.Диск / Google Drive)."
         )
         return
 
+    num_speakers, speaker_names = _parse_caption(caption)
     workdir = storage.new_workdir()
     status = await msg.answer("⬇️ Скачиваю…")
     try:
-        if downloader.is_youtube_url(text):
-            audio = await downloader.download_youtube(text, workdir)
+        kind = "youtube" if downloader.is_youtube_url(url) else "direct-url"
+        if downloader.is_youtube_url(url):
+            src = await downloader.download_youtube(url, workdir)
         else:
             await status.edit_text("⬇️ Скачиваю файл…")
-            src = await downloader.download_direct(text, workdir)
-            if src.suffix.lower() == ".opus":
-                audio = src
-            else:
-                await status.edit_text("🎧 Извлекаю аудио…")
-                audio = await downloader.extract_audio(src, workdir, stem=src.stem)
+            src = await downloader.download_direct(url, workdir)
+        log.info(
+            "%s downloaded %s: name=%r size=%.2fMB",
+            tag, kind, src.name, src.stat().st_size / 1024 / 1024,
+        )
 
-        raw_stem = _strip_media_ext(audio.name)
-        stem = raw_stem if raw_stem and raw_stem.lower() not in ("audio", "source") else _stem_from_url(text)
-        await _transcribe_and_send(msg, status, audio, workdir, stem=stem)
+        raw_stem = _strip_media_ext(src.name)
+        stem = raw_stem if raw_stem and raw_stem.lower() not in ("audio", "source") else _stem_from_url(url)
+
+        await status.edit_text("🎧 Извлекаю аудио…")
+        # Always downmix to mono opus — Scribe drops content on stereo sources.
+        audio = await downloader.extract_audio(src, workdir, stem="audio")
+
+        await _transcribe_and_send(
+            msg, status, audio, workdir, stem=stem,
+            num_speakers=num_speakers, speaker_names=speaker_names,
+        )
     except Exception as e:
-        log.exception("url pipeline failed")
+        log.exception("%s url pipeline failed", tag)
         await status.edit_text(f"❌ Ошибка: {e}")
     finally:
         storage.cleanup(workdir)
@@ -209,7 +320,11 @@ async def _transcribe_and_send(
     audio: pathlib.Path,
     workdir: pathlib.Path,
     stem: str,
+    *,
+    num_speakers: int | None = None,
+    speaker_names: dict[str, str] | None = None,
 ) -> None:
+    tag = _user_tag(msg)
     duration = await downloader.probe_duration(audio)
     size_mb = audio.stat().st_size / 1024 / 1024
     info = f"{size_mb:.1f} МБ"
@@ -217,14 +332,37 @@ async def _transcribe_and_send(
         h, rem = divmod(int(duration), 3600)
         m, s = divmod(rem, 60)
         info = f"{h:02d}:{m:02d}:{s:02d}, {size_mb:.1f} МБ"
-    await status.edit_text(f"📝 Транскрибирую через ElevenLabs Scribe… ({info})")
+    log.info(
+        "%s audio ready: stem=%r %.2fMB %.0fs num_speakers=%r names=%r → scribe",
+        tag, stem, size_mb, duration or 0.0, num_speakers, speaker_names,
+    )
+    hint = ""
+    if num_speakers:
+        hint = f", спикеров: {num_speakers}"
+        if speaker_names:
+            hint += f" ({', '.join(speaker_names.values())})"
+    await status.edit_text(f"📝 Транскрибирую через ElevenLabs Scribe… ({info}{hint})")
 
-    data = await asyncio.to_thread(scribe.transcribe, audio, ELEVEN_KEY)
-    outputs = scribe.write_outputs(data, workdir, stem)
+    biased = list(speaker_names.values()) if speaker_names else None
+    t0 = time.time()
+    data = await asyncio.to_thread(
+        scribe.transcribe, audio, ELEVEN_KEY,
+        num_speakers=num_speakers, biased_keywords=biased,
+    )
+    scribe_sec = time.time() - t0
+    outputs = scribe.write_outputs(data, workdir, stem, speaker_names=speaker_names)
+    words = [w for w in data.get("words", []) if w.get("type") == "word"]
+    txt = outputs["txt"]
+    txt_bytes = txt.stat().st_size if txt.exists() else 0
+    last_ts = words[-1].get("start", 0.0) if words else 0.0
+    log.info(
+        "%s scribe ok: %d words, last_ts=%.1fs, txt=%d bytes, took=%.1fs",
+        tag, len(words), last_ts, txt_bytes, scribe_sec,
+    )
+    _archive(msg, outputs)
 
     await status.edit_text("✅ Готово, отправляю…")
-    txt = outputs["txt"]
-    if txt.exists() and txt.stat().st_size > 0:
+    if txt.exists() and txt_bytes > 0:
         await msg.answer_document(FSInputFile(txt))
     await status.delete()
 
@@ -237,6 +375,17 @@ async def _fetch_to(file_path: str | None, dst: pathlib.Path) -> None:
             shutil.move(str(local_src), str(dst))
             return
     await bot.download_file(file_path, destination=dst)
+
+
+def _split_url_and_caption(text: str) -> tuple[str, str]:
+    """Split 'URL\\ncaption' or 'URL caption' — first whitespace-separated token is URL."""
+    text = text.strip()
+    if not text:
+        return "", ""
+    parts = text.split(None, 1)
+    url = parts[0]
+    caption = parts[1].strip() if len(parts) == 2 else ""
+    return url, caption
 
 
 def _stem_from(msg: Message, media) -> str:
