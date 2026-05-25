@@ -9,7 +9,7 @@ import requests
 
 API = "https://api.elevenlabs.io/v1/speech-to-text"
 
-PARAGRAPH_PAUSE_SEC = 4.0   # split paragraph if same-speaker pause is this long
+PARAGRAPH_PAUSE_SEC = 20.0  # split paragraph if same-speaker pause is this long
 PARAGRAPH_MAX_CHARS = 1500  # very long paragraphs get broken at sentence ends
 SRT_PAUSE_SEC = 1.2
 SRT_MAX_CHARS = 140
