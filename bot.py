@@ -117,10 +117,17 @@ log = logging.getLogger("scribe-bot")
 
 def _make_bot() -> Bot:
     props = DefaultBotProperties(parse_mode=ParseMode.HTML)
+    # aiogram's default per-request HTTP timeout is 60s. A self-hosted Bot API
+    # server downloads the whole file from Telegram on getFile (and large
+    # uploads take time too), which blows 60s easily. Give it room.
+    timeout = 30 * 60
     if LOCAL_API_URL:
-        session = AiohttpSession(api=TelegramAPIServer.from_base(LOCAL_API_URL, is_local=True))
+        session = AiohttpSession(
+            api=TelegramAPIServer.from_base(LOCAL_API_URL, is_local=True),
+            timeout=timeout,
+        )
         return Bot(TOKEN, session=session, default=props)
-    return Bot(TOKEN, default=props)
+    return Bot(TOKEN, session=AiohttpSession(timeout=timeout), default=props)
 
 
 bot = _make_bot()
