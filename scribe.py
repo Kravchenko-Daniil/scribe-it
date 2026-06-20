@@ -148,18 +148,21 @@ def to_paragraphs(
 def transcribe(
     path: pathlib.Path,
     api_key: str,
-    language: str = "rus",
+    language: str | None = None,
     *,
     num_speakers: int | None = None,
     biased_keywords: list[str] | None = None,
 ) -> dict:
     data = {
         "model_id": "scribe_v1",
-        "language_code": language,
         "diarize": "true",
         "timestamps_granularity": "word",
         "tag_audio_events": "false",
     }
+    # Omit language_code → Scribe auto-detects. Forcing a wrong language
+    # garbles output (e.g. English decoded as Russian).
+    if language:
+        data["language_code"] = language
     if num_speakers is not None:
         data["num_speakers"] = str(num_speakers)
     if biased_keywords:

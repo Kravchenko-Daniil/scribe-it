@@ -48,6 +48,17 @@ MEDIA_EXTS = {
 SOLO_WORDS = {"соло", "solo", "монолог", "monolog", "monologue"}
 DUO_WORDS = {"диалог", "dialog", "dialogue", "созвон", "call"}
 
+# Optional language override in caption. Maps keyword → ElevenLabs language_code.
+# Without a hint the caption omits language and Scribe auto-detects.
+LANG_WORDS = {
+    "en": "eng", "eng": "eng", "англ": "eng", "english": "eng",
+    "ru": "rus", "rus": "rus", "рус": "rus", "russian": "rus",
+    "uk": "ukr", "ukr": "ukr", "укр": "ukr",
+    "de": "deu", "deu": "deu", "нем": "deu",
+    "fr": "fra", "fra": "fra", "фр": "fra",
+    "es": "spa", "spa": "spa", "исп": "spa",
+}
+
 
 def _strip_media_ext(name: str) -> str:
     p = pathlib.PurePosixPath(name)
@@ -56,37 +67,39 @@ def _strip_media_ext(name: str) -> str:
     return p.name
 
 
-def _parse_caption(text: str | None) -> tuple[int | None, dict[str, str]]:
-    """Parse caption like '2 Даниил Толя' → (2, {'speaker_0': 'Даниил', 'speaker_1': 'Толя'}).
+def _parse_caption(text: str | None) -> tuple[int | None, dict[str, str], str | None]:
+    """Parse caption like '2 Даниил Толя' → (2, {'speaker_0': 'Даниил', 'speaker_1': 'Толя'}, None).
 
-    Strict: every token must be a digit, a known keyword, or a Capitalized name.
-    If anything else appears, the whole caption is ignored (no hints).
+    Strict: every token must be a digit, a known keyword, a language code, or a
+    Capitalized name. If anything else appears, the whole caption is ignored.
 
     Supported:
         '2'              → 2 speakers, no names
         '1' or 'соло'    → 1 speaker (monologue)
         'Даниил Толя'    → 2 speakers, names auto-numbered
         '2 Даниил Толя'  → 2 speakers + names
+        'en' / 'англ'    → force English (else Scribe auto-detects)
         empty / long / 'созвон с Толей' / '2 спикера' → no hints, model auto-detects
     """
     if not text:
-        return None, {}
+        return None, {}, None
     text = text.strip()
     if not text or len(text) > 80:
-        return None, {}
+        return None, {}, None
 
     tokens = [t for t in re.split(r"[,;/|\s]+", text) if t]
     if not tokens:
-        return None, {}
+        return None, {}, None
 
     num: int | None = None
     names: list[str] = []
+    language: str | None = None
     for t in tokens:
         low = t.lower()
         if t.isdigit():
             n = int(t)
             if not (1 <= n <= 32):
-                return None, {}
+                return None, {}, None
             if num is None:
                 num = n
             continue
@@ -98,16 +111,20 @@ def _parse_caption(text: str | None) -> tuple[int | None, dict[str, str]]:
             if num is None:
                 num = 2
             continue
+        if low in LANG_WORDS:
+            if language is None:
+                language = LANG_WORDS[low]
+            continue
         # имя: ≥2 букв, начинается с заглавной, остальное — буквы/дефис/апостроф
         if len(t) >= 2 and t[0].isupper() and all(c.isalpha() or c in "-’'" for c in t):
             names.append(t)
             continue
-        return None, {}  # неизвестный токен → бросаем всю команду
+        return None, {}, None  # неизвестный токен → бросаем всю команду
 
     if names and num is None:
         num = len(names)
     speaker_map = {f"speaker_{i}": n for i, n in enumerate(names)}
-    return num, speaker_map
+    return num, speaker_map, language
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,6 +162,7 @@ WELCOME = (
     "• <code>2</code> — диалог двоих\n"
     "• <code>соло</code> / <code>монолог</code> — один голос\n"
     "• имена через пробел — в порядке появления\n"
+    "• <code>en</code> / <code>англ</code> — язык, если запись не на русском\n"
     "• пусто — определю сам\n\n"
     "Часовые записи — на YouTube unlisted или на Диск, и ссылкой. Скачаю сам."
 )
@@ -248,7 +266,7 @@ async def on_media(msg: Message) -> None:
         log.info("%s rejected: over TG limit (%.1fMB)", tag, size / 1024 / 1024)
         return
 
-    num_speakers, speaker_names = _parse_caption(msg.caption)
+    num_speakers, speaker_names, language = _parse_caption(msg.caption)
     workdir = storage.new_workdir()
     status = await msg.answer("⬇️ Скачиваю файл…")
     try:
@@ -263,7 +281,7 @@ async def on_media(msg: Message) -> None:
 
         await _transcribe_and_send(
             msg, status, audio, workdir, stem=stem,
-            num_speakers=num_speakers, speaker_names=speaker_names,
+            num_speakers=num_speakers, speaker_names=speaker_names, language=language,
         )
     except Exception as e:
         log.exception("%s media pipeline failed", tag)
@@ -287,7 +305,7 @@ async def on_text(msg: Message) -> None:
         )
         return
 
-    num_speakers, speaker_names = _parse_caption(caption)
+    num_speakers, speaker_names, language = _parse_caption(caption)
     workdir = storage.new_workdir()
     status = await msg.answer("⬇️ Скачиваю…")
     try:
@@ -311,7 +329,7 @@ async def on_text(msg: Message) -> None:
 
         await _transcribe_and_send(
             msg, status, audio, workdir, stem=stem,
-            num_speakers=num_speakers, speaker_names=speaker_names,
+            num_speakers=num_speakers, speaker_names=speaker_names, language=language,
         )
     except Exception as e:
         log.exception("%s url pipeline failed", tag)
@@ -329,6 +347,7 @@ async def _transcribe_and_send(
     *,
     num_speakers: int | None = None,
     speaker_names: dict[str, str] | None = None,
+    language: str | None = None,
 ) -> None:
     tag = _user_tag(msg)
     duration = await downloader.probe_duration(audio)
@@ -339,20 +358,23 @@ async def _transcribe_and_send(
         m, s = divmod(rem, 60)
         info = f"{h:02d}:{m:02d}:{s:02d}, {size_mb:.1f} МБ"
     log.info(
-        "%s audio ready: stem=%r %.2fMB %.0fs num_speakers=%r names=%r → scribe",
-        tag, stem, size_mb, duration or 0.0, num_speakers, speaker_names,
+        "%s audio ready: stem=%r %.2fMB %.0fs num_speakers=%r names=%r lang=%r → scribe",
+        tag, stem, size_mb, duration or 0.0, num_speakers, speaker_names, language,
     )
     hint = ""
     if num_speakers:
         hint = f", спикеров: {num_speakers}"
         if speaker_names:
             hint += f" ({', '.join(speaker_names.values())})"
+    if language:
+        hint += f", язык: {language}"
     await status.edit_text(f"📝 Транскрибирую через ElevenLabs Scribe… ({info}{hint})")
 
     biased = list(speaker_names.values()) if speaker_names else None
     t0 = time.time()
     data = await asyncio.to_thread(
         scribe.transcribe, audio, ELEVEN_KEY,
+        language=language,
         num_speakers=num_speakers, biased_keywords=biased,
     )
     scribe_sec = time.time() - t0
