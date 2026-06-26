@@ -44,6 +44,9 @@ async def download_youtube(url: str, out_dir: pathlib.Path) -> pathlib.Path:
         *YT_DLP,
         "--no-playlist",
         "-f", "bestaudio/best",
+        # mweb client returns direct https media URLs (not HLS segments).
+        # Default tv client serves m3u8, which googlevideo 403s from datacenter IPs.
+        "--extractor-args", "youtube:player_client=mweb",
         "--extract-audio",
         "--audio-format", "opus",
         "--audio-quality", "0",
