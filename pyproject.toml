@@ -9,6 +9,7 @@ dependencies = [
     "bgutil-ytdlp-pot-provider>=1.1",
     "python-dotenv>=1.0",
     "requests>=2.32",
+    "telethon>=1.36",
     "yt-dlp>=2026.1.1",
 ]
 
