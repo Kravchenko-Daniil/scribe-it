@@ -300,17 +300,23 @@ check("--no-playlist" in download_src, "download_youtube keeps --no-playlist")
 
 
 # ============================================================================
-# 10. SCOPE (Phase-3 boundary: bot.py still untouched). pyproject.toml/uv.lock
-#     are intentionally NOT asserted here — Phase 2 legitimately adds
-#     fastapi/uvicorn to them. bot.py stays frozen until Phase 3.
+# 10. SCOPE (Phase-3 has LANDED: bot.py is now the thin API client). The old
+#     "bot.py frozen until Phase 3" git-porcelain boundary guard is retired —
+#     Phase 3 (docs/PLAN.md Фаза 3) owns bot.py by design, so asserting it is
+#     unmodified is now false-by-design. The scope invariant that SURVIVES the
+#     transition is asserted instead: bot.py carries NO core/ pipeline imports
+#     (it is a thin client) and the Phase-2 deliverable api.py still exists.
+#     pyproject.toml/uv.lock are intentionally NOT asserted here (Phase 2 adds
+#     fastapi/uvicorn to them). Check count stays 2 so the suite total is 48.
+#     [Retired by the Phase-3 verifier; see tests/check_phase3.py for full
+#      thin-client coverage.]
 # ============================================================================
 section("10. SCOPE")
-scope_status = subprocess.run(
-    ["git", "-C", str(REPO), "status", "--porcelain", "--", "bot.py"],
-    capture_output=True, text=True,
+bot_src = (REPO / "bot.py").read_text(encoding="utf-8")
+check(
+    re.search(r"^\s*(?:import|from)\s+(?:core|downloader|scribe|storage)\b", bot_src, re.M) is None,
+    "bot.py is thin client — no core/downloader/scribe/storage imports (Phase 3 landed)",
 )
-check(scope_status.stdout.strip() == "",
-      f"bot.py NOT modified (Phase 3 boundary; git porcelain empty; got {scope_status.stdout!r})")
 check((REPO / "api.py").exists(), "api.py present (Phase 2 deliverable created)")
 
 
