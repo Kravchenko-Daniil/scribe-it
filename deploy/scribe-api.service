@@ -1,0 +1,21 @@
+[Unit]
+Description=Scribe It — transcription HTTP API (job model over core/)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/scribe-bot
+Environment=APP_ENV=prod
+# Explicit --host/--port are MANDATORY: uvicorn defaults to :8000, but the deploy
+# health-loop and the bot's SCRIBE_API_URL both target 127.0.0.1:8080. Without
+# --port 8080 the health-loop hits an empty port and the deploy fails every time.
+ExecStart=/root/.local/bin/uv run --project /opt/scribe-bot uvicorn api:app --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -7,6 +7,13 @@ __pycache__/
 *.pyc
 tmp/
 *.log
+*.session
+*.session-journal
+arsen_state/
 .mypy_cache/
 .ruff_cache/
 .DS_Store
+.adw/
+cache/
+staging/
+jobs/

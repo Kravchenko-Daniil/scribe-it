@@ -11,7 +11,6 @@ dependencies = [
     "python-dotenv>=1.0",
     "python-multipart>=0.0.32",
     "requests>=2.32",
-    "telethon>=1.36",
     "uvicorn[standard]>=0.51.0",
     "yt-dlp>=2026.1.1",
 ]
