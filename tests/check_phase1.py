@@ -61,18 +61,22 @@ except Exception as e:  # pragma: no cover
 
 
 # ============================================================================
-# 2. SCRIBE PARITY — byte-for-byte identical to HEAD:scribe.py
+# 2. SCRIBE FROZEN — core/scribe.py byte-for-byte identical to its committed
+#    HEAD state. The old scribe.py→core/scribe.py move is committed (Phase 1),
+#    so parity is now asserted against HEAD:core/scribe.py: this proves the
+#    render core has NOT drifted since the Phase-1 commit (a boundary that
+#    stays in force through Phase 2+).
 # ============================================================================
-section("2. SCRIBE PARITY (byte-for-byte vs git HEAD:scribe.py)")
+section("2. SCRIBE FROZEN (byte-for-byte vs git HEAD:core/scribe.py)")
 head_scribe = subprocess.run(
-    ["git", "-C", str(REPO), "show", "HEAD:scribe.py"],
+    ["git", "-C", str(REPO), "show", "HEAD:core/scribe.py"],
     capture_output=True,
 )
-check(head_scribe.returncode == 0, "git show HEAD:scribe.py succeeds")
+check(head_scribe.returncode == 0, "git show HEAD:core/scribe.py succeeds")
 core_scribe_bytes = (REPO / "core" / "scribe.py").read_bytes()
 check(
     head_scribe.stdout == core_scribe_bytes,
-    "core/scribe.py identical to HEAD:scribe.py (empty diff)",
+    "core/scribe.py identical to HEAD:core/scribe.py (empty diff)",
 )
 
 
@@ -296,17 +300,18 @@ check("--no-playlist" in download_src, "download_youtube keeps --no-playlist")
 
 
 # ============================================================================
-# 10. SCOPE (bot.py / pyproject.toml / uv.lock untouched, api.py absent)
+# 10. SCOPE (Phase-3 boundary: bot.py still untouched). pyproject.toml/uv.lock
+#     are intentionally NOT asserted here — Phase 2 legitimately adds
+#     fastapi/uvicorn to them. bot.py stays frozen until Phase 3.
 # ============================================================================
 section("10. SCOPE")
 scope_status = subprocess.run(
-    ["git", "-C", str(REPO), "status", "--porcelain", "--",
-     "bot.py", "pyproject.toml", "uv.lock"],
+    ["git", "-C", str(REPO), "status", "--porcelain", "--", "bot.py"],
     capture_output=True, text=True,
 )
 check(scope_status.stdout.strip() == "",
-      f"bot.py/pyproject.toml/uv.lock NOT modified (git porcelain empty; got {scope_status.stdout!r})")
-check(not (REPO / "api.py").exists(), "api.py NOT created (Phase 2 boundary respected)")
+      f"bot.py NOT modified (Phase 3 boundary; git porcelain empty; got {scope_status.stdout!r})")
+check((REPO / "api.py").exists(), "api.py present (Phase 2 deliverable created)")
 
 
 # ============================================================================

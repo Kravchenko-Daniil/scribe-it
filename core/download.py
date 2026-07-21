@@ -125,6 +125,13 @@ async def extract_audio(
         "-c:a", "libopus",
         "-b:a", "32k",
         "-ac", "1",
+        # Deterministic bytes: fix the Ogg bitstream serial number (ffmpeg
+        # randomizes it per mux by default) and the encoder vendor string, so
+        # sha256(opus) is stable across re-encodes of identical audio. Without
+        # this the Scribe cache (key = sha256(opus), core/cache.py) can NEVER
+        # hit and every repeat re-pays ElevenLabs.
+        "-fflags", "+bitexact",
+        "-flags:a", "+bitexact",
         str(dst),
     ])
     if code != 0:
