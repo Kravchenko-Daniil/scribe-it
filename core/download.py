@@ -2,9 +2,23 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import pathlib
 import re
 import sys
+
+import requests
+
+# Yandex.Disk public API endpoint for resolving a direct download href.
+API_DOWNLOAD = "https://cloud-api.yandex.net/v1/disk/public/resources/download"
+
+# cookies.txt for yt-dlp. Env-overridable; default is the repo root (parent of
+# core/), not core/ itself — otherwise the file migrates with the package and
+# download_youtube silently loses cookie-gated YouTube videos.
+COOKIES_PATH = pathlib.Path(
+    os.environ.get("COOKIES_PATH")
+    or (pathlib.Path(__file__).resolve().parent.parent / "cookies.txt")
+)
 
 YOUTUBE_RE = re.compile(
     r"^(https?://)?(www\.|m\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/",
@@ -38,7 +52,7 @@ async def download_youtube(url: str, out_dir: pathlib.Path) -> pathlib.Path:
     """yt-dlp: audio-only, re-encoded to opus. Returns path to the file."""
     out_dir.mkdir(parents=True, exist_ok=True)
     template = str(out_dir / "%(title)s.%(ext)s")
-    cookies = pathlib.Path(__file__).parent / "cookies.txt"
+    cookies = COOKIES_PATH
 
     base_cmd = [
         *YT_DLP,
@@ -132,3 +146,20 @@ async def probe_duration(path: pathlib.Path) -> float | None:
         return float(log.strip().split("\n")[0])
     except (ValueError, IndexError):
         return None
+
+
+def get_download_url(public_key: str, path: str) -> str:
+    r = requests.get(
+        API_DOWNLOAD, params={"public_key": public_key, "path": path}, timeout=60
+    )
+    r.raise_for_status()
+    return r.json()["href"]
+
+
+def download_to(url: str, dst: pathlib.Path) -> None:
+    with requests.get(url, stream=True, timeout=60 * 60) as r:
+        r.raise_for_status()
+        with dst.open("wb") as f:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)

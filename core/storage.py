@@ -1,12 +1,19 @@
 """Per-request working directories under tmp/ with automatic cleanup."""
 from __future__ import annotations
 
+import os
 import pathlib
 import shutil
 import time
 import uuid
 
-ROOT = pathlib.Path(__file__).parent / "tmp"
+# Working-dir root. Env-overridable; default is the repo root (parent of core/),
+# not core/tmp — otherwise tmp/ migrates with the package and lands outside the
+# deploy exclude.
+ROOT = pathlib.Path(
+    os.environ.get("SCRIBE_TMP_DIR")
+    or (pathlib.Path(__file__).resolve().parent.parent / "tmp")
+)
 
 
 def new_workdir() -> pathlib.Path:
