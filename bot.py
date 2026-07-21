@@ -51,8 +51,10 @@ STAGING_DIR = pathlib.Path(
 ).resolve()
 # Download-каталог локального Bot-API — источник файлов для shutil.move в staging.
 # Должен быть на ТОЙ ЖЕ ФС, что STAGING_DIR (иначе move деградирует в copy 2 ГБ).
+# Дефолт = штатный --dir сервера telegram-bot-api (на проде он запущен с
+# --dir=/var/lib/telegram-bot-api); переопределяется env BOTAPI_DOWNLOAD_DIR.
 BOTAPI_DOWNLOAD_DIR = pathlib.Path(
-    os.environ.get("BOTAPI_DOWNLOAD_DIR") or "/opt/scribe-bot/botapi"
+    os.environ.get("BOTAPI_DOWNLOAD_DIR") or "/var/lib/telegram-bot-api"
 )
 
 # Поллинг джобы.
