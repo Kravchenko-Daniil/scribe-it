@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -519,13 +520,24 @@ def get_job(job_id: str) -> dict:
 
 @app.get("/health")
 def health():
-    """200 ТОЛЬКО если API прочитал ELEVENLABS_API_KEY (охраняет прод-катовер)."""
+    """200 ТОЛЬКО если API прочитал ELEVENLABS_API_KEY (охраняет прод-катовер).
+
+    Filesystem-only: cookies-статус читает cookies.txt с диска (core.download.
+    read_cookie_status), сети не трогает — health остаётся дешёвым и быстрым.
+    cookies_present сохранён ради обратной совместимости; cookies — подробности,
+    включая expired (протухли ли значимые YouTube-cookie'ы).
+    """
     if not ELEVENLABS_API_KEY:
         return JSONResponse(
             {"status": "error", "reason": "ELEVENLABS_API_KEY not set"},
             status_code=503,
         )
-    return {"status": "ok", "cookies_present": dl.COOKIES_PATH.exists()}
+    cookies = dl.read_cookie_status()
+    return {
+        "status": "ok",
+        "cookies_present": cookies.present,
+        "cookies": dataclasses.asdict(cookies),
+    }
 
 
 if __name__ == "__main__":

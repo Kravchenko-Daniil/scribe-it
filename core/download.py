@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import pathlib
 import re
 import sys
+import time
 
 import requests
 
@@ -19,6 +21,77 @@ COOKIES_PATH = pathlib.Path(
     os.environ.get("COOKIES_PATH")
     or (pathlib.Path(__file__).resolve().parent.parent / "cookies.txt")
 )
+
+# Cookies that gate an authenticated YouTube/Google session. SID/HSID/SSID are
+# the classic Google session triplet, SAPISID signs authenticated API calls,
+# and the __Secure-* names are their HTTPS-only successors used by current
+# Google login. Once every one of these has expired the session is dead even
+# though cookies.txt still exists — that's the "protuhli" signal /health needs.
+SESSION_COOKIE_NAMES = frozenset({
+    "SID", "HSID", "SSID", "SAPISID",
+    "__Secure-1PSID", "__Secure-3PSID",
+    "__Secure-1PAPISID", "__Secure-3PAPISID",
+})
+
+
+@dataclasses.dataclass(frozen=True)
+class CookieStatus:
+    """Filesystem-only snapshot of cookies.txt health (no network calls)."""
+
+    present: bool  # cookies.txt exists
+    age_seconds: float | None  # file mtime age; None if absent
+    expires_at: int | None  # earliest expiry among session cookies (epoch seconds); None if absent/unreadable
+    expired: bool  # True if absent, unreadable, or every session cookie has already expired
+
+
+def _read_netscape_expiries(path: pathlib.Path) -> list[tuple[str, int]]:
+    """Parse a Netscape-format cookie file into (name, expiry) pairs.
+
+    Fields are tab-separated: domain, flag, path, secure, expiration, name, value
+    (expiration is the 5th field, a unix timestamp). Malformed lines — too few
+    fields, a non-integer expiration — are skipped rather than raising, since a
+    hand-edited or partially-exported cookies.txt is a real, recoverable case.
+    """
+    expiries: list[tuple[str, int]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) < 7:
+            continue
+        try:
+            expiry = int(fields[4])
+        except ValueError:
+            continue
+        expiries.append((fields[5], expiry))
+    return expiries
+
+
+def read_cookie_status(path: pathlib.Path | None = None) -> CookieStatus:
+    """Read cookies.txt off disk and report whether the YouTube session is alive.
+
+    Cheap and side-effect-free: stat + read one file, no yt-dlp, no HTTP.
+    """
+    p = path or COOKIES_PATH
+    if not p.exists():
+        return CookieStatus(present=False, age_seconds=None, expires_at=None, expired=True)
+    age_seconds = time.time() - p.stat().st_mtime
+    session_expiries = [
+        expiry for name, expiry in _read_netscape_expiries(p) if name in SESSION_COOKIE_NAMES
+    ]
+    if not session_expiries:
+        # File exists but carries none of the session cookies — unreadable/foreign
+        # file, so there is no live session to report; treat as expired.
+        return CookieStatus(present=True, age_seconds=age_seconds, expires_at=None, expired=True)
+    expires_at = min(session_expiries)
+    return CookieStatus(
+        present=True,
+        age_seconds=age_seconds,
+        expires_at=expires_at,
+        expired=expires_at <= int(time.time()),
+    )
+
 
 YOUTUBE_RE = re.compile(
     r"^(https?://)?(www\.|m\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/",
